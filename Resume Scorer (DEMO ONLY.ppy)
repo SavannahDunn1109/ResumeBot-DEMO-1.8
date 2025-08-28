@@ -15,7 +15,7 @@ from docx import Document
 # ---------- Page setup ----------
 st.set_page_config(page_title="Resume Scorer (Demo)", page_icon="📄", layout="wide")
 st.title("📄 Resume Scorer (Demo Mode)")
-st.caption("This demo reads local/ uploaded resumes only — no SharePoint connection needed.")
+st.caption("This demo reads local / uploaded resumes only — no SharePoint connection.")
 st.sidebar.write("🐍 Python:", sys.version.split()[0])
 
 # ========================
@@ -23,10 +23,11 @@ st.sidebar.write("🐍 Python:", sys.version.split()[0])
 # ========================
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     """Return text from a PDF (best effort)."""
-    with open("tmp_demo.pdf", "wb") as f:
+    tmp = "tmp_demo.pdf"
+    with open(tmp, "wb") as f:
         f.write(file_bytes)
     text = []
-    reader = PdfReader("tmp_demo.pdf")
+    reader = PdfReader(tmp)
     for page in reader.pages:
         page_text = page.extract_text() or ""
         text.append(page_text)
@@ -34,9 +35,10 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 
 def extract_text_from_docx(file_bytes: bytes) -> str:
     """Return text from a DOCX."""
-    with open("tmp_demo.docx", "wb") as f:
+    tmp = "tmp_demo.docx"
+    with open(tmp, "wb") as f:
         f.write(file_bytes)
-    doc = Document("tmp_demo.docx")
+    doc = Document(tmp)
     return "\n".join(p.text for p in doc.paragraphs)
 
 # ==================================
@@ -163,10 +165,10 @@ def classify_level(years: float, jr_max: int, mid_max: int) -> str:
 # Requirements input
 # ===================
 st.subheader("📥 Job Requirements (.txt)")
-uploaded_req_file = st.file_uploader("Upload a .txt containing keywords (one per line)", type=["txt"])
+uploaded_req_file = st.file_uploader("Upload a .txt with keywords (one per line)", type=["txt"])
 KEYWORDS = []
 if uploaded_req_file:
-    for line in uploaded_req_file.read().decode("utf-8").splitlines():
+    for line in uploaded_req_file.read().decode("utf-8", errors="ignore").splitlines():
         line = line.strip()
         if line and not line.endswith(":"):
             KEYWORDS.append(line)
@@ -185,22 +187,46 @@ with colA:
 with colB:
     jr_max = st.number_input("Max years: Junior", 0, 10, 2, 1)
 with colC:
-    mid_max = st.number_input("Max years: Mid", jr_max, 25, 6, 1)
+    # Fix: default must be >= jr_max to avoid ValueBelowMinError
+    mid_max = st.number_input(
+        "Max years: Mid",
+        min_value=jr_max, max_value=25,
+        value=max(jr_max + 1, 6), step=1
+    )
 with colD:
     enforce_min = st.checkbox("Enforce minimum YOE", value=False)
 min_years_required = st.number_input("Minimum years to include", 0, 30, 3, 1)
 
+# ===================
+# Scoring function
+# ===================
 def score_resume(text: str):
     lower_text = text.lower()
-    found = [kw for kw in KEYWORDS if kw.lower() in lower_text]
-    kw_score = 10 * len(found)
+
+    # Keyword scoring
+    found_keywords = [kw for kw in KEYWORDS if kw.lower() in lower_text]
+    kw_score = 10 * len(found_keywords)
+
+    # YOE
     years, src = estimate_years_experience(text)
     exp_score = years * exp_points_per_year
     total = kw_score + exp_score
+
+    # Clearance check (case-insensitive)
+    clearance_phrases = ["active secret clearance", "secret clearance"]
+    found_clearances = [p for p in clearance_phrases if p in lower_text]
+    has_clearance = "Yes" if found_clearances else "No"
+
     return {
-        "years": years, "years_source": src, "level": classify_level(years, jr_max, mid_max),
-        "kw_score": kw_score, "exp_score": exp_score, "total": total,
-        "keywords_found": ", ".join(found),
+        "years": years,
+        "years_source": src,
+        "level": classify_level(years, jr_max, mid_max),
+        "kw_score": kw_score,
+        "exp_score": exp_score,
+        "total": total,
+        "keywords_found": ", ".join(found_keywords),
+        "clearance": has_clearance,
+        "clearance_phrases": ", ".join(found_clearances),
     }
 
 # ================================
@@ -234,7 +260,7 @@ with right:
 # Combine sources
 all_files = local_files + uploaded_files
 if not all_files:
-    st.info("Add some .pdf/.docx files to `data/` or upload them here, then click **Score resumes**.")
+    st.info("Add .pdf/.docx to `data/` or upload here, then click **Score resumes**.")
 
 # ===================
 # Run scoring
@@ -262,6 +288,8 @@ if st.button("▶️ Score resumes"):
             "Experience Score": result["exp_score"],
             "Total Score": result["total"],
             "Keywords Found": result["keywords_found"],
+            "Clearance Mentioned": result["clearance"],
+            "Clearance Phrases": result["clearance_phrases"],
         })
 
     if not rows:
